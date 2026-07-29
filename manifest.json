@@ -1,0 +1,14 @@
+{
+  "name": "Hyginix — Log Extra",
+  "short_name": "Log Extra",
+  "description": "Log an operational extra for an employee in seconds, online or off.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#f4f8f7",
+  "theme_color": "#1A7A7A",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

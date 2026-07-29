@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<!--
+  Hyginix — Log Extra (phone app for the Office Manager)
+
+  Built to meet one requirement: logging an extra must take under five seconds
+  and must never make him wait for the network. Everything here follows from
+  that — the app is cached on the phone so it opens instantly, the common case
+  is three taps with no typing, and saving is optimistic: it confirms straight
+  away and sends in the background, queueing if there is no signal.
+
+  Talks to EXTRAS_API.gs in the sandbox HR script project.
+-->
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#1A7A7A">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Log Extra">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon.svg">
+<title>Log Extra</title>
+<style>
+  :root {
+    --teal:#1A7A7A; --teal-mid:#2A9B9B; --teal-pale:#EAF5F5;
+    --ink:#12201f; --muted:#657877; --line:#dfe8e7; --bg:#f4f8f7; --card:#fff;
+    --green:#1B7F3B; --green-bg:#E4F5E9; --red:#C62828; --red-bg:#FDECEC;
+    --amber:#B26A00; --amber-bg:#FFF4E2;
+  }
+  * { box-sizing:border-box; margin:0; padding:0; -webkit-tap-highlight-color:transparent; }
+  html,body { background:var(--bg); color:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; }
+  body { padding:0 0 calc(96px + env(safe-area-inset-bottom)); font-size:17px; line-height:1.4; }
+
+  header {
+    position:sticky; top:0; z-index:20; background:var(--teal); color:#fff;
+    padding:calc(12px + env(safe-area-inset-top)) 16px 12px;
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
+  }
+  header h1 { font-size:18px; font-weight:700; letter-spacing:.2px; }
+  .qbadge { font-size:12px; font-weight:700; background:rgba(255,255,255,.2);
+    padding:4px 10px; border-radius:99px; display:none; }
+  .qbadge.on { display:inline-block; }
+  .qbadge.err { background:#fff; color:var(--red); }
+
+  main { padding:14px 16px 0; }
+  section { margin-bottom:18px; }
+  .lbl { font-size:12px; font-weight:800; letter-spacing:1.3px; text-transform:uppercase;
+    color:var(--muted); margin-bottom:8px; display:flex; align-items:center; gap:8px; }
+  .lbl .pick { color:var(--teal); }
+
+  .chips { display:flex; flex-wrap:wrap; gap:8px; }
+  .chip {
+    border:1.5px solid var(--line); background:var(--card); color:var(--ink);
+    border-radius:12px; padding:13px 15px; font-size:16px; font-weight:600;
+    cursor:pointer; font-family:inherit; min-height:48px; flex:0 0 auto;
+  }
+  .chip:active { transform:scale(.97); }
+  .chip.on { background:var(--teal); border-color:var(--teal); color:#fff; }
+  .chip.wide { flex:1 1 100%; text-align:left; }
+  .chip.ghost { border-style:dashed; color:var(--muted); font-weight:600; }
+
+  input[type=text], input[type=number], input[type=date], input[type=search] {
+    width:100%; border:1.5px solid var(--line); border-radius:12px; padding:13px 14px;
+    font-size:17px; font-family:inherit; background:var(--card); color:var(--ink); min-height:48px;
+  }
+  input:focus { outline:none; border-color:var(--teal-mid); }
+
+  .amtrow { display:flex; gap:8px; align-items:stretch; }
+  .amtrow input { flex:1; font-size:20px; font-weight:700; text-align:right; }
+  .sign { flex:0 0 62px; border:1.5px solid var(--line); background:var(--card);
+    border-radius:12px; font-size:22px; font-weight:800; cursor:pointer; font-family:inherit; }
+  .sign.minus { background:var(--red-bg); border-color:#F3B4B4; color:var(--red); }
+
+  .save {
+    position:fixed; left:0; right:0; bottom:0; z-index:20;
+    padding:12px 16px calc(12px + env(safe-area-inset-bottom));
+    background:linear-gradient(to top, var(--bg) 72%, rgba(244,248,247,0));
+  }
+  .save button {
+    width:100%; min-height:60px; border:none; border-radius:14px; background:var(--teal);
+    color:#fff; font-size:19px; font-weight:800; font-family:inherit; cursor:pointer;
+  }
+  .save button:disabled { background:#c6d3d2; color:#889998; }
+  .save button:active:not(:disabled) { transform:scale(.985); }
+
+  .toast {
+    position:fixed; left:16px; right:16px; bottom:calc(84px + env(safe-area-inset-bottom));
+    z-index:30; border-radius:12px; padding:14px 16px; font-size:16px; font-weight:700;
+    display:none; box-shadow:0 6px 20px rgba(0,0,0,.16);
+  }
+  .toast.on { display:block; animation:pop .18s ease-out; }
+  .toast.ok { background:var(--green-bg); color:var(--green); }
+  .toast.err { background:var(--red-bg); color:var(--red); }
+  @keyframes pop { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:none; } }
+
+  #setup { padding:22px 18px; }
+  #setup h2 { font-size:20px; margin-bottom:6px; }
+  #setup p { color:var(--muted); font-size:15px; margin-bottom:16px; }
+  #setup label { display:block; font-size:12px; font-weight:800; letter-spacing:1.2px;
+    text-transform:uppercase; color:var(--muted); margin:14px 0 6px; }
+  #setup button { width:100%; min-height:56px; border:none; border-radius:14px;
+    background:var(--teal); color:#fff; font-size:18px; font-weight:800;
+    font-family:inherit; margin-top:20px; cursor:pointer; }
+  .hint { font-size:13px; color:var(--muted); margin-top:8px; }
+  .hidden { display:none !important; }
+</style>
+
+<div id="setup" class="hidden">
+  <h2>Set up once</h2>
+  <p>Only needed the first time on this phone.</p>
+  <label for="s_url">App URL</label>
+  <input type="text" id="s_url" placeholder="https://script.google.com/…/exec" autocomplete="off">
+  <label for="s_key">Device key</label>
+  <input type="text" id="s_key" placeholder="the key from the spreadsheet" autocomplete="off">
+  <button onclick="saveSetup()">Save and start</button>
+  <div class="hint">Both come from the HR spreadsheet. Nothing else is stored on the phone.</div>
+</div>
+
+<div id="app" class="hidden">
+  <header>
+    <h1>Log Extra</h1>
+    <span class="qbadge" id="qbadge"></span>
+  </header>
+
+  <main>
+    <section>
+      <div class="lbl">Who <span class="pick" id="whoPick"></span></div>
+      <div class="chips" id="whoChips"></div>
+      <div style="margin-top:8px"><input type="search" id="whoSearch" placeholder="Search all employees…"></div>
+    </section>
+
+    <section>
+      <div class="lbl">Why <span class="pick" id="whyPick"></span></div>
+      <div class="chips" id="whyChips"></div>
+      <div id="whyOtherWrap" class="hidden" style="margin-top:8px">
+        <input type="text" id="whyOther" placeholder="Type the reason…">
+      </div>
+    </section>
+
+    <section>
+      <div class="lbl">How much</div>
+      <div class="chips" id="amtChips" style="margin-bottom:8px"></div>
+      <div class="amtrow">
+        <button class="sign" id="signBtn" onclick="toggleSign()">+</button>
+        <input type="number" id="amt" inputmode="numeric" placeholder="0" oninput="render()">
+      </div>
+    </section>
+
+    <section>
+      <div class="lbl">When</div>
+      <div class="chips" id="whenChips"></div>
+      <div id="whenPickWrap" class="hidden" style="margin-top:8px">
+        <input type="date" id="whenDate" onchange="render()">
+      </div>
+    </section>
+  </main>
+
+  <div class="save"><button id="saveBtn" disabled onclick="save()">Save</button></div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="app.js"></script>
+<script>
+  if ('serviceWorker' in navigator) {
+    navigator.serviceWorker.register('sw.js').catch(function(){ /* offline-first is a bonus, not a requirement */ });
+  }
+</script>

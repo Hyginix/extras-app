@@ -12,7 +12,7 @@
 // cache. With no signal, the cached copy is served and everything still works
 // offline. The network request has a short timeout so a weak connection falls
 // back to cache quickly instead of hanging on a white screen.
-var CACHE = 'hyginix-extras-v2';
+var CACHE = 'hyginix-extras-v3';
 var SHELL = ['./', './index.html', './app.js', './manifest.json', './icon.svg'];
 var NET_TIMEOUT_MS = 3500;
 

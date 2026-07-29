@@ -59,7 +59,17 @@
     border-radius:var(--r); padding:0 16px; font-size:17px; font-family:inherit;
   }
   input.ctl { -webkit-appearance:none; appearance:none; }
-  input.ctl:focus { outline:none; border-color:var(--teal-mid); box-shadow:0 0 0 3px rgba(42,155,155,.14); }
+  input.ctl:focus, select.ctl:focus { outline:none; border-color:var(--teal-mid); box-shadow:0 0 0 3px rgba(42,155,155,.14); }
+  /* Native <select>: on a phone this opens the OS picker — compact, familiar,
+     and it keeps the whole form on one screen. Fifteen full-width option rows
+     pushed How much and When below the fold. */
+  select.ctl {
+    -webkit-appearance:none; appearance:none; font-weight:600;
+    padding-right:44px; background-repeat:no-repeat;
+    background-position:right 16px center; background-size:12px 8px;
+    background-image:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8'><path d='M1 1l5 5 5-5' fill='none' stroke='%23667877' stroke-width='2' stroke-linecap='round'/></svg>");
+  }
+  select.ctl.unset { color:var(--muted); font-weight:500; }
 
   /* ---- a stack of full-width option rows: never ragged ---- */
   .stack { display:flex; flex-direction:column; gap:var(--gap); }
@@ -172,7 +182,7 @@
 
     <div class="field">
       <div class="lbl">Why</div>
-      <div class="stack" id="whyStack"></div>
+      <select class="ctl unset" id="whySelect" onchange="onWhyChange()"></select>
       <div id="whyOtherWrap" class="hidden" style="margin-top:10px">
         <input type="text" id="whyOther" class="ctl" placeholder="Type the reason…">
         <div class="hint">Saved to the list, so you only type it once.</div>
@@ -190,7 +200,7 @@
 
     <div class="field">
       <div class="lbl">When</div>
-      <div class="g2" id="whenGrid"></div>
+      <div class="g3" id="whenGrid"></div>
       <div id="whenPickWrap" class="hidden" style="margin-top:10px">
         <input type="date" id="whenDate" class="ctl" onchange="onDateChange()">
       </div>

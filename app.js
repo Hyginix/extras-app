@@ -169,14 +169,32 @@ function renderWho() {
 }
 
 function renderWhy() {
-  $('whyStack').innerHTML =
-    (BOOT.reasons || []).map(function(r) {
-      var on = (SEL.reason === r && !SEL.otherReason);
-      return '<button class="ctl opt' + (on ? ' on' : '') + '" onclick="pickWhy(' + attr(r) + ')">' +
-             '<span>' + esc(r) + '</span><span class="tick">✓</span></button>';
+  var sel = $('whySelect');
+  var reasons = BOOT.reasons || [];
+  var chosen = SEL.otherReason ? '__other__' : SEL.reason;
+
+  sel.innerHTML =
+    '<option value="">Choose a reason…</option>' +
+    reasons.map(function(r) {
+      return '<option value="' + esc(r) + '"' + (r === chosen ? ' selected' : '') + '>' + esc(r) + '</option>';
     }).join('') +
-    '<button class="ctl opt ghost' + (SEL.otherReason ? ' on' : '') + '" onclick="pickOther()">' +
-    '<span>Something else…</span><span class="tick">✓</span></button>';
+    '<option value="__other__"' + (chosen === '__other__' ? ' selected' : '') + '>Something else…</option>';
+
+  sel.value = chosen || '';
+  sel.classList.toggle('unset', !chosen);
+  $('whyOtherWrap').classList.toggle('hidden', !SEL.otherReason);
+}
+
+function onWhyChange() {
+  var v = $('whySelect').value;
+  if (v === '__other__') {
+    SEL.otherReason = true; SEL.reason = '';
+    renderWhy(); render();
+    $('whyOther').focus();
+  } else {
+    SEL.otherReason = false; SEL.reason = v;
+    renderWhy(); render();
+  }
 }
 
 function renderAmounts() {
@@ -187,11 +205,15 @@ function renderAmounts() {
 }
 
 function renderWhen() {
-  var opts = [['today','Today'], ['yesterday','Yesterday']];
+  // Three options on one row: the two he uses constantly, plus a way OUT to any
+  // other date. The two-button version had no third option at all, so an extra
+  // for last week was simply unreachable.
+  var opts = [['today','Today'], ['yesterday','Yesterday'], ['other','Other…']];
   $('whenGrid').innerHTML = opts.map(function(o) {
-    return '<button class="ctl' + (SEL.when === o[0] ? ' on' : '') + '" onclick="pickWhen(\'' + o[0] + '\')">' + o[1] + '</button>';
+    return '<button class="ctl' + (SEL.when === o[0] ? ' on' : '') +
+           '" onclick="pickWhen(\'' + o[0] + '\')">' + o[1] + '</button>';
   }).join('');
-  // The date field stays OPEN once another day is chosen, so it is obvious at a
+  // Once another day is chosen the date field STAYS open, so it is obvious at a
   // glance that this entry is not for today.
   $('whenPickWrap').classList.toggle('hidden', SEL.when !== 'other');
 }
@@ -211,18 +233,19 @@ function currentReason() { return SEL.otherReason ? $('whyOther').value.trim() :
 
 function pickWho(n)  { SEL.name = n; $('whoSearch').value = ''; renderWho(); render(); }
 function clearWho()  { SEL.name = ''; renderWho(); render(); setTimeout(function(){ $('whoSearch').focus(); }, 50); }
-function pickWhy(r)  { SEL.reason = r; SEL.otherReason = false; $('whyOtherWrap').classList.add('hidden'); renderWhy(); render(); }
-function pickOther() {
-  SEL.otherReason = true; SEL.reason = '';
-  $('whyOtherWrap').classList.remove('hidden');
-  renderWhy(); render(); $('whyOther').focus();
-}
 function pickAmt(a)  { $('amt').value = a; renderAmounts(); render(); }
 function toggleSign(){ SEL.sign = -SEL.sign; render(); }
 function pickWhen(w) {
   SEL.when = w;
-  $('whenDate').value = (w === 'yesterday') ? shiftDays(todayStr(), -1) : todayStr();
+  if (w === 'today')     $('whenDate').value = todayStr();
+  if (w === 'yesterday') $('whenDate').value = shiftDays(todayStr(), -1);
+  // 'other' deliberately keeps whatever is in the field and just reveals it,
+  // so tapping Other after picking a date does not throw the date away.
   renderWhen(); render();
+  if (w === 'other') {
+    var el = $('whenDate');
+    try { el.showPicker ? el.showPicker() : el.focus(); } catch (e) { el.focus(); }
+  }
 }
 function onDateChange() {
   var v = $('whenDate').value;

@@ -1,20 +1,18 @@
 // =============================================================================
 // Hyginix — Log Extra (phone app)
 //
-// The whole design follows from one requirement: under five seconds, and never
-// waiting for the network.
+// One requirement drives all of this: under five seconds, and never waiting for
+// the network.
 //
-//   • The app is service-worker cached, so it opens instantly and offline.
-//   • Employees and presets are cached in localStorage and refreshed in the
+//   • Service-worker cached, so it opens instantly and offline.
+//   • Employees, reasons and amounts are cached locally and refreshed in the
 //     background — the screen is usable before any network call finishes.
-//   • Saving is OPTIMISTIC: the entry goes into a local queue, the OM is told
-//     "Saved" immediately, and the queue is flushed in the background. If he is
-//     in a stairwell with no signal it stays queued and goes when signal
-//     returns. He never waits, and nothing is lost.
+//   • Saving is OPTIMISTIC: the entry goes to a local queue, the OM is told
+//     "Saved" immediately, and it sends in the background. No signal in a
+//     stairwell just means it goes later. He never waits, nothing is lost.
 //
-// Every queued entry carries its own id, which the server uses as an
-// idempotency key — retries after a dropped connection cannot double-pay
-// anyone. See EXTRAS_API.gs.
+// Every queued entry carries its own id, used server-side as an idempotency
+// key — a retry after a dropped connection cannot pay anyone twice.
 // =============================================================================
 
 var LS = {
@@ -22,11 +20,13 @@ var LS = {
   key:    'hx_key',
   boot:   'hx_boot',
   queue:  'hx_queue',
-  recent: 'hx_recent'   // people used on THIS phone, most recent first
+  hist:   'hx_hist'
 };
 
-var BOOT = { employees: [], recent: [], reasons: [], amounts: [] };
-var SEL = { name: '', reason: '', otherReason: false, sign: 1, when: 'today' };
+var BOOT = { employees: [], reasons: [], amounts: [] };
+var HIST = [];
+var SEL  = { name: '', reason: '', otherReason: false, sign: 1, when: 'today' };
+var TAB  = 'log';
 
 function $(id) { return document.getElementById(id); }
 function get(k, d) { try { return JSON.parse(localStorage.getItem(k)) || d; } catch (e) { return d; } }
@@ -35,160 +35,267 @@ function esc(s) {
   return String(s == null ? '' : s).replace(/&/g,'&amp;').replace(/</g,'&lt;')
     .replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
-function todayStr() {
-  var d = new Date();
-  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
-}
-function shiftDays(str, n) {
-  var p = str.split('-');
-  var d = new Date(Number(p[0]), Number(p[1])-1, Number(p[2]) + n);
-  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+function attr(s) { return JSON.stringify(String(s)).replace(/"/g, '&quot;'); }
+function pad(n) { return String(n).padStart(2, '0'); }
+function todayStr() { var d = new Date(); return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate()); }
+function shiftDays(s, n) {
+  var p = s.split('-'); var d = new Date(+p[0], +p[1]-1, +p[2]+n);
+  return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate());
 }
 function fmt(n) {
   n = Number(n) || 0;
   return (n < 0 ? '−' : '') + Math.abs(n).toLocaleString('hu-HU').replace(/,/g,' ');
+}
+function niceDate(iso) {
+  if (iso === todayStr()) return 'Today';
+  if (iso === shiftDays(todayStr(), -1)) return 'Yesterday';
+  var p = String(iso).split('-');
+  if (p.length !== 3) return iso;
+  var M = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return Number(p[2]) + ' ' + M[Number(p[1]) - 1];
 }
 
 // ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
 function start() {
+  // A setup link (#u=…&k=…) configures the app without anything being typed.
+  // This exists because on iOS a home-screen app gets its OWN storage, separate
+  // from Safari — so settings entered in the browser are simply not there when
+  // the icon is opened. Opening the LINK from the home screen fixes that.
+  // The fragment is stripped immediately so the key does not sit in the bar.
+  var h = location.hash || '';
+  if (h.indexOf('u=') !== -1 && h.indexOf('k=') !== -1) {
+    var m = { };
+    h.replace(/^#/, '').split('&').forEach(function(kv) {
+      var i = kv.indexOf('='); if (i > 0) m[kv.slice(0, i)] = decodeURIComponent(kv.slice(i + 1));
+    });
+    if (m.u && m.k) { set(LS.url, m.u); set(LS.key, m.k); }
+    history.replaceState(null, '', location.pathname + location.search);
+  }
+
   if (!localStorage.getItem(LS.url) || !localStorage.getItem(LS.key)) {
     $('setup').classList.remove('hidden');
     return;
   }
+
+  // Ask the browser to keep our storage — without it iOS may evict local data
+  // for a site it considers idle, which would mean setting up again.
+  try { if (navigator.storage && navigator.storage.persist) navigator.storage.persist(); } catch (e) {}
+
   $('app').classList.remove('hidden');
   BOOT = get(LS.boot, BOOT);
+  HIST = get(LS.hist, []);
   $('whenDate').value = todayStr();
-  renderChips();
-  render();
-  flushQueue();          // anything stranded from last time goes first
-  refreshBootstrap();    // then quietly freshen the lists
+  renderAll();
+  flushQueue();
+  refreshBootstrap();
+  refreshHistory();
 }
 
 function saveSetup() {
-  var url = $('s_url').value.trim();
-  var key = $('s_key').value.trim();
+  var url = $('s_url').value.trim(), key = $('s_key').value.trim();
   if (!url || !key) { toast(false, 'Both fields are needed.'); return; }
-  localStorage.setItem(LS.url, JSON.stringify(url));
-  localStorage.setItem(LS.key, JSON.stringify(key));
+  set(LS.url, url); set(LS.key, key);
   $('setup').classList.add('hidden');
   start();
 }
 
-// JSONP — a cross-origin fetch() to an Apps Script /exec URL goes through a
-// googleusercontent redirect and is unreliable; a script tag sidesteps CORS
-// completely. Failure is silent on purpose: the app already has cached lists
-// and must stay usable.
+// JSONP — a cross-origin fetch() to an Apps Script /exec URL redirects through
+// googleusercontent and is unreliable; a script tag sidesteps CORS entirely.
+// Silent on failure: the cached lists keep the app usable.
 function refreshBootstrap() {
   var url = get(LS.url, ''), key = get(LS.key, '');
   if (!url) return;
-  var cbName = 'hxcb' + Date.now();
-  var s = document.createElement('script');
-  var done = false;
-  window[cbName] = function(res) {
+  var cb = 'hxcb' + Date.now(), s = document.createElement('script'), done = false;
+  window[cb] = function(res) {
     done = true;
-    if (res && res.ok) {
-      BOOT = res;
-      set(LS.boot, res);
-      renderChips();
-    }
+    if (res && res.ok) { BOOT = res; set(LS.boot, res); renderAll(); }
     cleanup();
   };
   function cleanup() {
-    try { delete window[cbName]; } catch (e) { window[cbName] = undefined; }
+    try { delete window[cb]; } catch (e) { window[cb] = undefined; }
     if (s.parentNode) s.parentNode.removeChild(s);
   }
   s.onerror = cleanup;
   setTimeout(function(){ if (!done) cleanup(); }, 12000);
-  s.src = url + '?callback=' + cbName + '&key=' + encodeURIComponent(key) + '&t=' + Date.now();
+  s.src = url + '?callback=' + cb + '&key=' + encodeURIComponent(key) + '&t=' + Date.now();
   document.body.appendChild(s);
 }
 
+function refreshHistory() {
+  post({ action: 'history' }, function(res) {
+    if (res && res.ok && res.entries) { HIST = res.entries; set(LS.hist, HIST); renderHistory(); }
+  });
+}
+
+// text/plain keeps this a "simple request" so no preflight is sent — Apps
+// Script cannot answer one. The body is still JSON.
+function post(payload, onDone) {
+  var url = get(LS.url, ''), key = get(LS.key, '');
+  if (!url) { onDone && onDone(null); return; }
+  fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify(Object.assign({ key: key }, payload))
+  }).then(function(r) { return r.json(); })
+    .then(function(res) { onDone && onDone(res); })
+    .catch(function() { onDone && onDone(null); });
+}
+
 // ---------------------------------------------------------------------------
-// Rendering
+// Rendering — LOG
 // ---------------------------------------------------------------------------
-function renderChips() {
-  // WHO — this phone's own recent people first (they repeat constantly), then
-  // whatever the server reports, then everyone else via search.
-  var mine = get(LS.recent, []);
-  var people = mine.concat((BOOT.recent || []).filter(function(n){ return mine.indexOf(n) === -1; })).slice(0, 8);
-  $('whoChips').innerHTML = people.map(function(n) {
-    return '<button class="chip' + (SEL.name === n ? ' on' : '') + '" onclick="pickWho(' + JSON.stringify(n).replace(/"/g,'&quot;') + ')">' + esc(n) + '</button>';
-  }).join('') || '<span class="hint">Search for someone below.</span>';
+function renderAll() { renderWho(); renderWhy(); renderAmounts(); renderWhen(); render(); renderHistory(); }
 
-  // WHY
-  var reasons = BOOT.reasons || [];
-  $('whyChips').innerHTML = reasons.map(function(r) {
-    return '<button class="chip wide' + (SEL.reason === r && !SEL.otherReason ? ' on' : '') + '" onclick="pickWhy(' + JSON.stringify(r).replace(/"/g,'&quot;') + ')">' + esc(r) + '</button>';
-  }).join('') +
-    '<button class="chip ghost wide' + (SEL.otherReason ? ' on' : '') + '" onclick="pickOther()">✎ Other reason…</button>';
+function renderWho() {
+  var picked = !!SEL.name;
+  $('whoPicked').classList.toggle('hidden', !picked);
+  $('whoSearchWrap').classList.toggle('hidden', picked);
+  if (picked) { $('whoName').textContent = SEL.name; return; }
 
-  // HOW MUCH
-  $('amtChips').innerHTML = (BOOT.amounts || []).map(function(a) {
-    return '<button class="chip" onclick="pickAmt(' + a + ')">' + fmt(a) + '</button>';
+  var q = ($('whoSearch').value || '').trim().toLowerCase();
+  var box = $('whoResults');
+  if (!q) { box.innerHTML = ''; return; }
+  var hits = (BOOT.employees || []).filter(function(p) {
+    return p.name.toLowerCase().indexOf(q) !== -1;
+  }).slice(0, 12);
+  box.innerHTML = hits.length
+    ? hits.map(function(p) {
+        return '<button class="ctl opt" onclick="pickWho(' + attr(p.name) + ')">' +
+               '<span>' + esc(p.name) + '</span><span class="tick">✓</span></button>';
+      }).join('')
+    : '<div class="empty">Nobody matches “' + esc(q) + '”.</div>';
+}
+
+function renderWhy() {
+  $('whyStack').innerHTML =
+    (BOOT.reasons || []).map(function(r) {
+      var on = (SEL.reason === r && !SEL.otherReason);
+      return '<button class="ctl opt' + (on ? ' on' : '') + '" onclick="pickWhy(' + attr(r) + ')">' +
+             '<span>' + esc(r) + '</span><span class="tick">✓</span></button>';
+    }).join('') +
+    '<button class="ctl opt ghost' + (SEL.otherReason ? ' on' : '') + '" onclick="pickOther()">' +
+    '<span>Something else…</span><span class="tick">✓</span></button>';
+}
+
+function renderAmounts() {
+  var cur = Number($('amt').value) || 0;
+  $('amtGrid').innerHTML = (BOOT.amounts || []).slice(0, 6).map(function(a) {
+    return '<button class="ctl' + (Math.abs(cur) === a ? ' on' : '') + '" onclick="pickAmt(' + a + ')">' + fmt(a) + '</button>';
   }).join('');
+}
 
-  // WHEN
-  var opts = [['today','Today'], ['yesterday','Yesterday'], ['pick','Another day…']];
-  $('whenChips').innerHTML = opts.map(function(o) {
-    return '<button class="chip' + (SEL.when === o[0] ? ' on' : '') + '" onclick="pickWhen(\'' + o[0] + '\')">' + o[1] + '</button>';
+function renderWhen() {
+  var opts = [['today','Today'], ['yesterday','Yesterday']];
+  $('whenGrid').innerHTML = opts.map(function(o) {
+    return '<button class="ctl' + (SEL.when === o[0] ? ' on' : '') + '" onclick="pickWhen(\'' + o[0] + '\')">' + o[1] + '</button>';
   }).join('');
+  // The date field stays OPEN once another day is chosen, so it is obvious at a
+  // glance that this entry is not for today.
+  $('whenPickWrap').classList.toggle('hidden', SEL.when !== 'other');
 }
 
 function render() {
-  $('whoPick').textContent = SEL.name ? '· ' + SEL.name : '';
   var why = currentReason();
-  $('whyPick').textContent = why ? '· ' + (why.length > 26 ? why.slice(0,26) + '…' : why) : '';
   $('signBtn').textContent = SEL.sign > 0 ? '+' : '−';
-  $('signBtn').className = 'sign' + (SEL.sign < 0 ? ' minus' : '');
-
+  $('signBtn').className = 'ctl sign' + (SEL.sign < 0 ? ' minus' : '');
   var amt = Math.abs(Number($('amt').value) || 0);
-  $('saveBtn').disabled = !(SEL.name && why && amt > 0);
-  $('saveBtn').textContent = amt > 0 && SEL.name
-    ? 'Save ' + fmt(SEL.sign * amt) + ' Ft'
-    : 'Save';
+  var ok = !!(SEL.name && why && amt > 0);
+  $('saveBtn').disabled = !ok;
+  $('saveBtn').textContent = ok ? 'Save ' + fmt(SEL.sign * amt) + ' Ft' : 'Save';
   renderQueueBadge();
 }
 
-function currentReason() {
-  return SEL.otherReason ? $('whyOther').value.trim() : SEL.reason;
-}
+function currentReason() { return SEL.otherReason ? $('whyOther').value.trim() : SEL.reason; }
 
-function pickWho(n) { SEL.name = n; $('whoSearch').value = ''; renderChips(); render(); }
-function pickWhy(r) { SEL.reason = r; SEL.otherReason = false; $('whyOtherWrap').classList.add('hidden'); renderChips(); render(); }
+function pickWho(n)  { SEL.name = n; $('whoSearch').value = ''; renderWho(); render(); }
+function clearWho()  { SEL.name = ''; renderWho(); render(); setTimeout(function(){ $('whoSearch').focus(); }, 50); }
+function pickWhy(r)  { SEL.reason = r; SEL.otherReason = false; $('whyOtherWrap').classList.add('hidden'); renderWhy(); render(); }
 function pickOther() {
   SEL.otherReason = true; SEL.reason = '';
   $('whyOtherWrap').classList.remove('hidden');
-  renderChips(); render(); $('whyOther').focus();
+  renderWhy(); render(); $('whyOther').focus();
 }
-function pickAmt(a) { $('amt').value = a; render(); }
-function toggleSign() { SEL.sign = -SEL.sign; render(); }
+function pickAmt(a)  { $('amt').value = a; renderAmounts(); render(); }
+function toggleSign(){ SEL.sign = -SEL.sign; render(); }
 function pickWhen(w) {
   SEL.when = w;
-  $('whenPickWrap').classList.toggle('hidden', w !== 'pick');
-  if (w === 'today') $('whenDate').value = todayStr();
-  if (w === 'yesterday') $('whenDate').value = shiftDays(todayStr(), -1);
-  renderChips(); render();
+  $('whenDate').value = (w === 'yesterday') ? shiftDays(todayStr(), -1) : todayStr();
+  renderWhen(); render();
+}
+function onDateChange() {
+  var v = $('whenDate').value;
+  SEL.when = (v === todayStr()) ? 'today' : (v === shiftDays(todayStr(), -1) ? 'yesterday' : 'other');
+  renderWhen(); render();
 }
 
-// Search across everyone — only needed for the long tail, so it renders into
-// the same chip row rather than opening another screen.
 document.addEventListener('input', function(e) {
-  if (e.target && e.target.id === 'whoSearch') {
-    var q = e.target.value.trim().toLowerCase();
-    if (!q) { renderChips(); return; }
-    var hits = (BOOT.employees || []).filter(function(p) {
-      return p.name.toLowerCase().indexOf(q) !== -1;
-    }).slice(0, 10);
-    $('whoChips').innerHTML = hits.length
-      ? hits.map(function(p) {
-          return '<button class="chip wide" onclick="pickWho(' + JSON.stringify(p.name).replace(/"/g,'&quot;') + ')">' + esc(p.name) + '</button>';
-        }).join('')
-      : '<span class="hint">Nobody matches.</span>';
-  }
-  if (e.target && e.target.id === 'whyOther') render();
+  if (!e.target) return;
+  if (e.target.id === 'whoSearch') renderWho();
+  if (e.target.id === 'whyOther') render();
 });
+
+// Tapping the date field itself counts as choosing another day.
+document.addEventListener('DOMContentLoaded', function() {
+  var g = $('whenGrid'); if (!g) return;
+});
+
+// ---------------------------------------------------------------------------
+// Tabs
+// ---------------------------------------------------------------------------
+function showTab(t) {
+  TAB = t;
+  $('tabLog').classList.toggle('on', t === 'log');
+  $('tabHist').classList.toggle('on', t === 'hist');
+  $('viewLog').classList.toggle('hidden', t !== 'log');
+  $('viewHist').classList.toggle('hidden', t !== 'hist');
+  $('saveBar').classList.toggle('hidden', t !== 'log');
+  if (t === 'hist') { renderHistory(); refreshHistory(); }
+}
+
+// ---------------------------------------------------------------------------
+// History
+// ---------------------------------------------------------------------------
+function renderHistory() {
+  var box = $('histList'); if (!box) return;
+  var q = ($('histSearch') && $('histSearch').value || '').trim().toLowerCase();
+  var rows = HIST.filter(function(r) { return !q || r.name.toLowerCase().indexOf(q) !== -1; });
+
+  if (!rows.length) {
+    box.innerHTML = '<div class="empty">' +
+      (HIST.length ? 'Nobody matches that name.' : 'Nothing logged in the last two months yet.') +
+      '</div>';
+    return;
+  }
+
+  box.innerHTML = rows.map(function(r) {
+    return '<div class="row' + (r.voided ? ' void' : '') + '">' +
+      '<div class="top"><span class="nm">' + esc(r.name) + '</span>' +
+      '<span class="amt' + (r.amount < 0 ? ' neg' : '') + '">' + fmt(r.amount) + ' Ft</span></div>' +
+      '<div class="meta">' + esc(r.reason) + '</div>' +
+      '<div class="meta">' + niceDate(r.date) + '</div>' +
+      (r.voided
+        ? '<span class="voidtag">Undone</span>'
+        : '<div class="act"><button onclick="voidEntry(' + attr(r.id) + ',' + attr(r.name) + ')">Undo this entry</button></div>') +
+      '</div>';
+  }).join('');
+}
+
+function voidEntry(id, name) {
+  if (!confirm('Undo this entry for ' + name + '?\n\nIt stays visible as undone and stops counting towards pay.')) return;
+  post({ action: 'void', id: id }, function(res) {
+    if (res && res.ok) {
+      toast(true, 'Undone.');
+      HIST = HIST.map(function(r) { return r.id === id ? Object.assign({}, r, { voided: true }) : r; });
+      set(LS.hist, HIST);
+      renderHistory();
+      refreshHistory();
+    } else {
+      toast(false, (res && res.message) || 'No signal — try again when you are back online.');
+    }
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Save — optimistic, queued, retried
@@ -206,14 +313,12 @@ function save() {
     description: reason
   };
 
-  var q = get(LS.queue, []);
-  q.push(entry);
-  set(LS.queue, q);
+  var q = get(LS.queue, []); q.push(entry); set(LS.queue, q);
 
-  // Remember this person on THIS phone — the same few come up over and over.
-  var mine = get(LS.recent, []).filter(function(n) { return n !== SEL.name; });
-  mine.unshift(SEL.name);
-  set(LS.recent, mine.slice(0, 8));
+  // Show it in history straight away — it is real to him the moment he taps.
+  HIST.unshift({ id: entry.clientId, date: entry.date, name: entry.employeeName,
+                 amount: entry.amount, reason: entry.description, by: 'PHONE APP', voided: false });
+  set(LS.hist, HIST);
 
   toast(true, 'Saved · ' + SEL.name + ' · ' + fmt(entry.amount) + ' Ft');
   resetForm();
@@ -221,12 +326,11 @@ function save() {
 }
 
 function resetForm() {
-  SEL.name = ''; SEL.reason = ''; SEL.otherReason = false; SEL.sign = 1; SEL.when = 'today';
+  SEL = { name: '', reason: '', otherReason: false, sign: 1, when: 'today' };
   $('amt').value = ''; $('whyOther').value = ''; $('whoSearch').value = '';
   $('whyOtherWrap').classList.add('hidden');
-  $('whenPickWrap').classList.add('hidden');
   $('whenDate').value = todayStr();
-  renderChips(); render();
+  renderAll();
   window.scrollTo({ top: 0, behavior: 'smooth' });
 }
 
@@ -235,50 +339,36 @@ function flushQueue() {
   if (FLUSHING) return;
   var q = get(LS.queue, []);
   if (!q.length) { renderQueueBadge(); return; }
-  var url = get(LS.url, ''), key = get(LS.key, '');
-  if (!url) return;
-
   FLUSHING = true;
   var entry = q[0];
 
-  // text/plain keeps this a "simple request" so the browser sends no preflight,
-  // which Apps Script cannot answer. The body is still JSON.
-  fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify(Object.assign({ key: key }, entry))
-  })
-    .then(function(r) { return r.json(); })
-    .then(function(res) {
-      FLUSHING = false;
-      if (res && res.ok) {
-        var cur = get(LS.queue, []).filter(function(x) { return x.clientId !== entry.clientId; });
-        set(LS.queue, cur);
-        renderQueueBadge();
-        if (cur.length) flushQueue();   // keep going
-      } else {
-        // A rejection is permanent (bad key, unknown employee) — retrying for
-        // ever would hide it. Drop it and say so, rather than silently losing
-        // the entry or spinning on it.
-        var cur2 = get(LS.queue, []).filter(function(x) { return x.clientId !== entry.clientId; });
-        set(LS.queue, cur2);
-        renderQueueBadge();
-        toast(false, (res && res.message) || 'Rejected — not saved.');
-      }
-    })
-    .catch(function() {
-      // Network failure — keep it queued and try again later.
-      FLUSHING = false;
+  post(entry, function(res) {
+    FLUSHING = false;
+    if (res && res.ok) {
+      var cur = get(LS.queue, []).filter(function(x) { return x.clientId !== entry.clientId; });
+      set(LS.queue, cur);
       renderQueueBadge();
-    });
+      if (cur.length) flushQueue(); else refreshHistory();
+    } else if (res && res.ok === false) {
+      // A rejection is permanent (bad key, unknown employee). Retrying for ever
+      // would hide it, so drop it and say so rather than losing it silently.
+      var cur2 = get(LS.queue, []).filter(function(x) { return x.clientId !== entry.clientId; });
+      set(LS.queue, cur2);
+      HIST = HIST.filter(function(r) { return r.id !== entry.clientId; });
+      set(LS.hist, HIST); renderHistory();
+      renderQueueBadge();
+      toast(false, res.message || 'Rejected — not saved.');
+    } else {
+      renderQueueBadge(); // no signal — stays queued
+    }
+  });
 }
 
 function renderQueueBadge() {
-  var n = get(LS.queue, []).length;
-  var b = $('qbadge');
+  var n = get(LS.queue, []).length, b = $('qbadge');
   if (!b) return;
   b.className = 'qbadge' + (n ? ' on' : '');
-  b.textContent = n ? n + ' waiting to send' : '';
+  b.textContent = n ? n + ' to send' : '';
 }
 
 function toast(ok, msg) {
@@ -286,12 +376,12 @@ function toast(ok, msg) {
   t.className = 'toast on ' + (ok ? 'ok' : 'err');
   t.textContent = (ok ? '✓ ' : '⚠ ') + msg;
   clearTimeout(window._tt);
-  window._tt = setTimeout(function() { t.className = 'toast'; }, ok ? 2200 : 5000);
+  window._tt = setTimeout(function(){ t.className = 'toast'; }, ok ? 2200 : 5000);
 }
 
-window.addEventListener('online', flushQueue);
+window.addEventListener('online', function(){ flushQueue(); refreshHistory(); });
 document.addEventListener('visibilitychange', function() {
-  if (!document.hidden) flushQueue();
+  if (!document.hidden) { flushQueue(); refreshHistory(); }
 });
 
 start();

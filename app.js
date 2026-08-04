@@ -97,13 +97,38 @@ function start() {
   $('whenDate').value = todayStr();
   renderAll();
   flushQueue();
-  refreshBootstrap();
+
+  // A phone that has never connected has no employee list, so a failure here is
+  // not something to hide — send it back to the setup screen with the reason.
+  var neverLoaded = !(BOOT.employees && BOOT.employees.length);
+  refreshBootstrap(neverLoaded ? function(msg) {
+    $('app').classList.add('hidden');
+    $('setup').classList.remove('hidden');
+    $('s_url').value = get(LS.url, '');
+    $('s_key').value = get(LS.key, '');
+    setupError(msg + ' — nothing was loaded, so check the key for a capital letter or a stray space.');
+  } : null);
   refreshHistory();
 }
 
+function setupError(msg) {
+  var el = $('setupErr'); if (!el) return;
+  el.classList.toggle('hidden', !msg);
+  el.textContent = msg || '';
+}
+
 function saveSetup() {
-  var url = $('s_url').value.trim(), key = $('s_key').value.trim();
-  if (!url || !key) { toast(false, 'Both fields are needed.'); return; }
+  // Strip every kind of whitespace, not just the ends. A key copied on a phone
+  // arrives with spaces, newlines and sometimes a non-breaking space in it, and
+  // the server compares with === — so an invisible character is a rejected key.
+  var url = $('s_url').value.replace(/[\s\u00A0\u200B]+/g, '');
+  var key = $('s_key').value.replace(/[\s\u00A0\u200B]+/g, '');
+  if (!url || !key) { setupError('Both fields are needed.'); return; }
+  if (url.indexOf('/exec') === -1) {
+    setupError('That URL should end in /exec. A /dev URL only works for the owner.');
+    return;
+  }
+  setupError('');
   set(LS.url, url); set(LS.key, key);
   $('setup').classList.add('hidden');
   start();
@@ -112,21 +137,28 @@ function saveSetup() {
 // JSONP — a cross-origin fetch() to an Apps Script /exec URL redirects through
 // googleusercontent and is unreliable; a script tag sidesteps CORS entirely.
 // Silent on failure: the cached lists keep the app usable.
-function refreshBootstrap() {
+// onFail is used on FIRST SETUP only. Staying silent is right when there are
+// cached lists to fall back on — the app keeps working offline and says nothing.
+// But on a phone that has never connected there is nothing to fall back on, and
+// silence produces a fully-drawn app with every list empty and no explanation.
+// That is exactly what a mistyped key looked like on 2026-08-04.
+function refreshBootstrap(onFail) {
   var url = get(LS.url, ''), key = get(LS.key, '');
   if (!url) return;
   var cb = 'hxcb' + Date.now(), s = document.createElement('script'), done = false;
+  function fail(msg) { if (onFail) onFail(msg); }
   window[cb] = function(res) {
     done = true;
     if (res && res.ok) { BOOT = res; set(LS.boot, res); renderAll(); }
+    else fail((res && res.message) || 'The app URL refused the request.');
     cleanup();
   };
   function cleanup() {
     try { delete window[cb]; } catch (e) { window[cb] = undefined; }
     if (s.parentNode) s.parentNode.removeChild(s);
   }
-  s.onerror = cleanup;
-  setTimeout(function(){ if (!done) cleanup(); }, 12000);
+  s.onerror = function() { fail('Could not reach that URL. Check the address and the signal.'); cleanup(); };
+  setTimeout(function(){ if (!done) { fail('No answer from the app URL after 12 seconds.'); cleanup(); } }, 12000);
   s.src = url + '?callback=' + cb + '&key=' + encodeURIComponent(key) + '&t=' + Date.now();
   document.body.appendChild(s);
 }

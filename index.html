@@ -150,11 +150,19 @@
   <h2>Set up once</h2>
   <p>Only needed the first time on this phone.</p>
   <div class="lbl">App URL</div>
-  <input type="text" id="s_url" class="ctl" placeholder="https://script.google.com/…/exec" autocomplete="off">
+  <!-- autocapitalize/autocorrect OFF, deliberately. iOS capitalises the first
+       letter of a text field by default and will "correct" a long random
+       string; the device key is compared with === on the server, so one
+       capital letter is a rejected key and a blank app. -->
+  <input type="text" id="s_url" class="ctl" placeholder="https://script.google.com/…/exec"
+         autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false" inputmode="url">
   <div class="lbl">Device key</div>
-  <input type="text" id="s_key" class="ctl" placeholder="key from the spreadsheet" autocomplete="off">
+  <input type="text" id="s_key" class="ctl" placeholder="key from the spreadsheet"
+         autocomplete="off" autocapitalize="none" autocorrect="off" spellcheck="false">
   <button onclick="saveSetup()">Save and start</button>
-  <div class="hint">Ask for the setup link instead and this fills in by itself.</div>
+  <div class="hint hidden" id="setupErr" style="color:var(--red);font-weight:600"></div>
+  <div class="hint"><b>Easier:</b> open the setup link instead and this fills itself in —
+    typing the key by hand on a phone is where it usually goes wrong.</div>
 </div>
 
 <div id="app" class="hidden">

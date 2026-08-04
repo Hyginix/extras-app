@@ -67,19 +67,23 @@ function niceDate(iso) {
 // Boot
 // ---------------------------------------------------------------------------
 function start() {
-  // A setup link (#u=…&k=…) configures the app without anything being typed.
-  // This exists because on iOS a home-screen app gets its OWN storage, separate
-  // from Safari — so settings entered in the browser are simply not there when
-  // the icon is opened. Opening the LINK from the home screen fixes that.
-  // The fragment is stripped immediately so the key does not sit in the bar.
-  var h = location.hash || '';
-  if (h.indexOf('u=') !== -1 && h.indexOf('k=') !== -1) {
-    var m = { };
-    h.replace(/^#/, '').split('&').forEach(function(kv) {
-      var i = kv.indexOf('='); if (i > 0) m[kv.slice(0, i)] = decodeURIComponent(kv.slice(i + 1));
-    });
-    if (m.u && m.k) { set(LS.url, m.u); set(LS.key, m.k); }
-    history.replaceState(null, '', location.pathname + location.search);
+  var fromLink = parseSetupLink(location.hash || '');
+  if (fromLink) {
+    set(LS.url, fromLink.url); set(LS.key, fromLink.key);
+
+    // THE HASH IS ONLY STRIPPED WHEN RUNNING FROM THE ICON. Stripping it in
+    // Safari — which is what this did until 2026-08-04 — quietly broke the one
+    // instruction that matters: open the link, then Add to Home Screen. iOS
+    // saves whatever URL is showing at that moment, and by then the key had
+    // already been removed, so the icon opened an unconfigured app with its own
+    // empty storage. On iOS a home-screen app does not share Safari's storage,
+    // so there was nothing for it to fall back on either.
+    //
+    // Keeping it means the icon carries its own setup. Once running from the
+    // icon there is no address bar to hide it from, so it goes then.
+    var standalone = (window.navigator.standalone === true) ||
+                     (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
+    if (standalone) history.replaceState(null, '', location.pathname + location.search);
   }
 
   if (!localStorage.getItem(LS.url) || !localStorage.getItem(LS.key)) {
@@ -111,6 +115,20 @@ function start() {
   refreshHistory();
 }
 
+// Pull { url, key } out of a setup link, wherever it came from — the address
+// bar or something pasted into a field. Returns null if it is not one.
+function parseSetupLink(text) {
+  var t = String(text || '');
+  var hash = t.indexOf('#') !== -1 ? t.slice(t.indexOf('#') + 1) : t;
+  if (hash.indexOf('u=') === -1 || hash.indexOf('k=') === -1) return null;
+  var m = {};
+  hash.split('&').forEach(function(kv) {
+    var i = kv.indexOf('=');
+    if (i > 0) { try { m[kv.slice(0, i)] = decodeURIComponent(kv.slice(i + 1)); } catch (e) {} }
+  });
+  return (m.u && m.k) ? { url: m.u, key: m.k } : null;
+}
+
 function setupError(msg) {
   var el = $('setupErr'); if (!el) return;
   el.classList.toggle('hidden', !msg);
@@ -123,7 +141,18 @@ function saveSetup() {
   // the server compares with === — so an invisible character is a rejected key.
   var url = $('s_url').value.replace(/[\s\u00A0\u200B]+/g, '');
   var key = $('s_key').value.replace(/[\s\u00A0\u200B]+/g, '');
-  if (!url || !key) { setupError('Both fields are needed.'); return; }
+
+  // PASTING THE WHOLE SETUP LINK IS THE OBVIOUS THING TO DO, so it works.
+  // It is one string containing both fields, and being told off for pasting it
+  // — which is what happened on 2026-08-04 — is the app's fault, not the
+  // user's. Accepted in either box, since nobody should have to guess which.
+  var linked = parseSetupLink(url) || parseSetupLink(key);
+  if (linked) {
+    url = linked.url; key = linked.key;
+    $('s_url').value = url; $('s_key').value = key;
+  }
+
+  if (!url || !key) { setupError('Both fields are needed. Or paste the whole setup link into either box.'); return; }
   if (url.indexOf('/exec') === -1) {
     setupError('That URL should end in /exec. A /dev URL only works for the owner.');
     return;

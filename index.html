@@ -86,6 +86,9 @@
   .g2 .ctl.on, .g3 .ctl.on { background:var(--teal); border-color:var(--teal); color:#fff; }
 
   .amtwrap { display:grid; grid-template-columns:var(--h) 1fr; gap:var(--gap); }
+  /* Hours have no sign button, so the input takes the whole row. */
+  .amtwrap.nosign { grid-template-columns:1fr; }
+  .g2 { display:grid; grid-template-columns:1fr 1fr; gap:var(--gap); }
   .sign { justify-content:center; font-size:24px; font-weight:800; cursor:pointer; padding:0; }
   .sign.minus { background:var(--red-bg); border-color:#EFC0BA; color:var(--red); }
   #amt { text-align:right; font-size:22px; font-weight:800; }
@@ -168,6 +171,12 @@
 
   <!-- ---------------- LOG ---------------- -->
   <main id="viewLog">
+    <div class="field hidden" id="modeWrap">
+      <div class="lbl">What are you logging</div>
+      <div class="g2" id="modeGrid"></div>
+      <div class="hint" id="meLine"></div>
+    </div>
+
     <div class="field">
       <div class="lbl">Who</div>
       <div id="whoPicked" class="picked hidden">
@@ -190,9 +199,10 @@
     </div>
 
     <div class="field">
-      <div class="lbl">How much</div>
+      <div class="lbl" id="amtLbl">How much</div>
       <div class="g3" id="amtGrid" style="margin-bottom:10px"></div>
-      <div class="amtwrap">
+      <div class="hint hidden" id="capWarn" style="color:var(--red);margin:0 0 8px"></div>
+      <div class="amtwrap" id="amtwrap">
         <button class="ctl sign" id="signBtn" onclick="toggleSign()">+</button>
         <input type="number" id="amt" class="ctl" inputmode="numeric" placeholder="0" oninput="render()">
       </div>

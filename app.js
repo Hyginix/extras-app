@@ -23,7 +23,15 @@ var LS = {
   hist:   'hx_hist'
 };
 
-var BOOT = { employees: [], reasons: [], amounts: [] };
+var BOOT = { employees: [], reasons: [], amounts: [], hourReasons: [], maxHoursPerEntry: 12,
+             me: { name: '', role: '', canHours: true, canExtras: true } };
+
+// MONEY or HOURS (2026-08-04). The OM types a figure in forints because he
+// knows what an incident is worth; a supervisor types HOURS, because they know
+// the job took two more of them and the payroll rules decide the money. Which
+// modes a phone offers comes from the server, keyed on that phone's own device
+// key — a supervisor's app simply has no money form in it.
+var MODE = 'money';
 var HIST = [];
 var SEL  = { name: '', reason: '', otherReason: false, sign: 1, when: 'today' };
 var TAB  = 'log';
@@ -146,7 +154,37 @@ function post(payload, onDone) {
 // ---------------------------------------------------------------------------
 // Rendering — LOG
 // ---------------------------------------------------------------------------
-function renderAll() { renderWho(); renderWhy(); renderAmounts(); renderWhen(); render(); renderHistory(); }
+function defaultMode() { return (BOOT.me && BOOT.me.canExtras) ? 'money' : 'hours'; }
+function isHours() { return MODE === 'hours'; }
+
+function renderAll() {
+  if (BOOT.me && !BOOT.me.canExtras) MODE = 'hours';   // no money form on this phone
+  renderModes(); renderWho(); renderWhy(); renderAmounts(); renderWhen(); render(); renderHistory();
+}
+
+function renderModes() {
+  var wrap = $('modeWrap'); if (!wrap) return;
+  var canBoth = !!(BOOT.me && BOOT.me.canExtras);
+  // One capability means no switch at all — a control with a single option is
+  // just clutter on a phone.
+  wrap.classList.toggle('hidden', !canBoth);
+  $('modeGrid').innerHTML = [['money','\uD83D\uDCB0 Money'], ['hours','\u23F1 Hours']].map(function(o) {
+    return '<button class="ctl' + (MODE === o[0] ? ' on' : '') +
+           '" onclick="pickMode(\'' + o[0] + '\')">' + o[1] + '</button>';
+  }).join('');
+  var who = $('meLine');
+  if (who) who.textContent = (BOOT.me && BOOT.me.name) ? ('Signed in as ' + BOOT.me.name) : '';
+}
+
+function pickMode(m) {
+  if (MODE === m) return;
+  MODE = m;
+  // The reason lists differ, so a reason carried across would be meaningless.
+  SEL.reason = ''; SEL.otherReason = false; SEL.sign = 1;
+  $('whyOther').value = ''; $('amt').value = '';
+  $('whyOtherWrap').classList.add('hidden');
+  renderAll();
+}
 
 function renderWho() {
   var picked = !!SEL.name;
@@ -170,7 +208,7 @@ function renderWho() {
 
 function renderWhy() {
   var sel = $('whySelect');
-  var reasons = BOOT.reasons || [];
+  var reasons = isHours() ? (BOOT.hourReasons || []) : (BOOT.reasons || []);
   var chosen = SEL.otherReason ? '__other__' : SEL.reason;
 
   sel.innerHTML =
@@ -197,11 +235,24 @@ function onWhyChange() {
   }
 }
 
+// Quick picks. Hours are small whole numbers, so a fixed set beats the
+// most-used-amounts list the money form derives from history.
+var HOUR_PRESETS = [1, 2, 3, 4, 6, 8];
+
 function renderAmounts() {
   var cur = Number($('amt').value) || 0;
-  $('amtGrid').innerHTML = (BOOT.amounts || []).slice(0, 6).map(function(a) {
-    return '<button class="ctl' + (Math.abs(cur) === a ? ' on' : '') + '" onclick="pickAmt(' + a + ')">' + fmt(a) + '</button>';
+  var opts = isHours() ? HOUR_PRESETS : (BOOT.amounts || []).slice(0, 6);
+  $('amtGrid').innerHTML = opts.map(function(a) {
+    return '<button class="ctl' + (Math.abs(cur) === a ? ' on' : '') + '" onclick="pickAmt(' + a + ')">' +
+           (isHours() ? a + ' h' : fmt(a)) + '</button>';
   }).join('');
+  var lbl = $('amtLbl');
+  if (lbl) lbl.textContent = isHours() ? 'How many hours' : 'How much';
+  // Hours are never negative — there is no such thing as taking hours away with
+  // this form, and a minus sign only invites the question.
+  var wrap = $('amtwrap');
+  if (wrap) wrap.classList.toggle('nosign', isHours());
+  $('amt').setAttribute('step', isHours() ? '0.5' : '1');
 }
 
 function renderWhen() {
@@ -221,11 +272,24 @@ function renderWhen() {
 function render() {
   var why = currentReason();
   $('signBtn').textContent = SEL.sign > 0 ? '+' : '−';
-  $('signBtn').className = 'ctl sign' + (SEL.sign < 0 ? ' minus' : '');
+  $('signBtn').className = 'ctl sign' + (SEL.sign < 0 ? ' minus' : '') + (isHours() ? ' hidden' : '');
   var amt = Math.abs(Number($('amt').value) || 0);
-  var ok = !!(SEL.name && why && amt > 0);
+  var max = Number(BOOT.maxHoursPerEntry) || 12;
+  // The same cap the server enforces, applied here so the refusal happens while
+  // the supervisor is still looking at what they typed — these hours become pay
+  // with nobody approving them, and 80 is a mistyped 8.
+  var overCap = isHours() && amt > max;
+  var ok = !!(SEL.name && why && amt > 0) && !overCap;
   $('saveBtn').disabled = !ok;
-  $('saveBtn').textContent = ok ? 'Save ' + fmt(SEL.sign * amt) + ' Ft' : 'Save';
+  $('saveBtn').textContent = overCap
+    ? ('Too many — ' + max + ' h is the limit')
+    : (ok ? (isHours() ? 'Save ' + amt + ' h' : 'Save ' + fmt(SEL.sign * amt) + ' Ft') : 'Save');
+  var warn = $('capWarn');
+  if (warn) {
+    warn.classList.toggle('hidden', !overCap);
+    warn.textContent = 'One entry cannot be more than ' + max +
+      ' hours. If it really was that long, send it as separate entries for each day.';
+  }
   renderQueueBadge();
 }
 
@@ -295,7 +359,8 @@ function renderHistory() {
   box.innerHTML = rows.map(function(r) {
     return '<div class="row' + (r.voided ? ' void' : '') + '">' +
       '<div class="top"><span class="nm">' + esc(r.name) + '</span>' +
-      '<span class="amt' + (r.amount < 0 ? ' neg' : '') + '">' + fmt(r.amount) + ' Ft</span></div>' +
+      '<span class="amt' + (r.amount < 0 ? ' neg' : '') + '">' +
+        (r.unit === 'h' ? r.amount + ' h' : fmt(r.amount) + ' Ft') + '</span></div>' +
       '<div class="meta">' + esc(r.reason) + '</div>' +
       '<div class="meta">' + niceDate(r.date) + '</div>' +
       (r.voided
@@ -327,28 +392,38 @@ function save() {
   var amt = Math.abs(Number($('amt').value) || 0);
   var reason = currentReason();
   if (!SEL.name || !reason || !amt) return;
+  if (isHours() && amt > (Number(BOOT.maxHoursPerEntry) || 12)) return;
 
-  var entry = {
-    clientId: 'EXT-' + Date.now().toString(36).toUpperCase() + '-' + Math.random().toString(36).slice(2,6).toUpperCase(),
-    employeeName: SEL.name,
-    date: $('whenDate').value || todayStr(),
-    amount: SEL.sign * amt,
-    description: reason
-  };
+  var when = $('whenDate').value || todayStr();
+  var id = 'EXT-' + Date.now().toString(36).toUpperCase() + '-' + Math.random().toString(36).slice(2,6).toUpperCase();
+
+  // Two shapes down one queue. The offline queue, the retry and the idempotency
+  // all work the same either way; only `action` and the field names differ, and
+  // the server routes on `action`.
+  var entry = isHours()
+    ? { clientId: id, action: 'hours', employeeName: SEL.name, date: when,
+        hours: amt, reason: reason }
+    : { clientId: id, employeeName: SEL.name, date: when,
+        amount: SEL.sign * amt, description: reason };
 
   var q = get(LS.queue, []); q.push(entry); set(LS.queue, q);
 
-  // Show it in history straight away — it is real to him the moment he taps.
-  HIST.unshift({ id: entry.clientId, date: entry.date, name: entry.employeeName,
-                 amount: entry.amount, reason: entry.description, by: 'PHONE APP', voided: false });
+  // Show it straight away — it is real to them the moment they tap.
+  HIST.unshift({ id: id, date: when, name: SEL.name,
+                 amount: isHours() ? amt : (SEL.sign * amt),
+                 unit: isHours() ? 'h' : '',
+                 reason: reason, by: (BOOT.me && BOOT.me.name) || 'PHONE APP', voided: false });
   set(LS.hist, HIST);
 
-  toast(true, 'Saved · ' + SEL.name + ' · ' + fmt(entry.amount) + ' Ft');
+  toast(true, 'Saved · ' + SEL.name + ' · ' + (isHours() ? amt + ' h' : fmt(entry.amount) + ' Ft'));
   resetForm();
   flushQueue();
 }
 
 function resetForm() {
+  // MODE deliberately survives — a supervisor logging hours logs several in a
+  // row, and being dropped back to the money form after each one would be a
+  // small betrayal every time.
   SEL = { name: '', reason: '', otherReason: false, sign: 1, when: 'today' };
   $('amt').value = ''; $('whyOther').value = ''; $('whoSearch').value = '';
   $('whyOtherWrap').classList.add('hidden');

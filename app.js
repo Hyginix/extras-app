@@ -448,16 +448,30 @@ function renderHistory() {
     return;
   }
 
+  // WHICH ONES HAVE ACTUALLY ARRIVED (2026-08-26). Every entry was drawn the
+  // same whether it had reached the sheet or was still sitting in the queue.
+  // The badge said HOW MANY were waiting and never WHICH, so the only way to
+  // check a particular one was to open the spreadsheet — and Felipe, seeing
+  // nothing arrive for ten minutes, came within a click of logging them again.
+  // A duplicate here is a duplicate in payroll.
+  var queuedIds = {};
+  get(LS.queue, []).forEach(function(x) { queuedIds[x.clientId] = true; });
+
   box.innerHTML = rows.map(function(r) {
-    return '<div class="row' + (r.voided ? ' void' : '') + '">' +
+    var waiting = !!queuedIds[r.id];
+    return '<div class="row' + (r.voided ? ' void' : '') + (waiting ? ' waiting' : '') + '">' +
       '<div class="top"><span class="nm">' + esc(r.name) + '</span>' +
       '<span class="amt' + (r.amount < 0 ? ' neg' : '') + '">' +
-        (r.unit === 'h' ? r.amount + ' h' : fmt(r.amount) + ' Ft') + '</span></div>' +
+        (r.unit === 'h' ? hourLabel(r.amount) : fmt(r.amount) + ' Ft') + '</span></div>' +
       '<div class="meta">' + esc(r.reason) + '</div>' +
       '<div class="meta">' + niceDate(r.date) + '</div>' +
-      (r.voided
-        ? '<span class="voidtag">Undone</span>'
-        : '<div class="act"><button onclick="voidEntry(' + attr(r.id) + ',' + attr(r.name) + ')">Undo this entry</button></div>') +
+      (waiting
+        // No Undo while it is queued: the office does not have this entry yet,
+        // so there is nothing there to undo and the attempt would just fail.
+        ? '<span class="waittag">⏳ Waiting to send — it is saved on this phone</span>'
+        : r.voided
+          ? '<span class="voidtag">Undone</span>'
+          : '<div class="act"><button onclick="voidEntry(' + attr(r.id) + ',' + attr(r.name) + ')">Undo this entry</button></div>') +
       '</div>';
   }).join('');
 }
@@ -568,7 +582,27 @@ function renderQueueBadge() {
   if (!b) return;
   b.className = 'qbadge' + (n ? ' on' : '');
   b.textContent = n ? n + ' to send' : '';
+  // Tap the badge to try right now, for when somebody is watching and does not
+  // want to wait out the timer.
+  b.onclick = n ? function() { flushQueue(); refreshHistory(); } : null;
+  b.style.cursor = n ? 'pointer' : '';
 }
+
+
+// NOTHING WAS RETRYING ON ITS OWN (2026-08-26). The queue was only ever pushed
+// by an event: coming back online, or the app being hidden and shown again. A
+// send that failed while the app sat open and still — a moment of bad signal on
+// site — simply waited there until the supervisor happened to switch apps.
+// Felipe watched entries take ten minutes for exactly this reason.
+//
+// Every 20 seconds, and only when there is something waiting and the app is on
+// screen. Costs nothing when the queue is empty, which is almost always.
+var RETRY_MS = 20000;
+setInterval(function() {
+  if (document.hidden) return;
+  if (!get(LS.queue, []).length) return;
+  flushQueue();
+}, RETRY_MS);
 
 function toast(ok, msg) {
   var t = $('toast');

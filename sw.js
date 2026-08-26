@@ -12,12 +12,12 @@
 // cache. With no signal, the cached copy is served and everything still works
 // offline. The network request has a short timeout so a weak connection falls
 // back to cache quickly instead of hanging on a white screen.
-// v7 (2026-08-26) — the 30 min quick pick and the optional note.
+// v8 (2026-08-26) — decimal keypad for hours, money fallback amounts, 6h removed.
 // BUMPED ON EVERY RELEASE. The activate handler deletes every cache that is not
 // this one, so a new name is what evicts the old app files. Ship a change
 // without bumping it and phones keep the previous version until something else
 // forces a refresh.
-var CACHE = 'hyginix-extras-v7';
+var CACHE = 'hyginix-extras-v8';
 var SHELL = ['./', './index.html', './app.js', './manifest.json', './icon.svg'];
 var NET_TIMEOUT_MS = 3500;
 

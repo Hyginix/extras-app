@@ -306,7 +306,15 @@ function onWhyChange() {
 // Stored as 0.5 because the server counts hours, but LABELLED "30 min":
 // a supervisor reads minutes, not fractions. The label is a display concern and
 // the value is never touched by it.
-var HOUR_PRESETS = [0.5, 1, 2, 3, 4, 6, 8];
+var HOUR_PRESETS = [0.5, 1, 2, 3, 4, 8];
+
+// MONEY FALLBACK (2026-08-26). The quick amounts are normally the ones used
+// most often, worked out from history — which is right once there IS history
+// and useless on day one. Production started with an empty extras register, so
+// the money grid was simply blank and every amount had to be typed.
+// These are the round figures the office actually uses; the moment real history
+// exists it takes over, so this never overrides anything learned.
+var MONEY_FALLBACK = [1000, 2000, 3000, 5000, 9000, 10000];
 
 function hourLabel(h) {
   if (h < 1) return Math.round(h * 60) + ' min';
@@ -315,7 +323,8 @@ function hourLabel(h) {
 
 function renderAmounts() {
   var cur = Number($('amt').value) || 0;
-  var opts = isHours() ? HOUR_PRESETS : (BOOT.amounts || []).slice(0, 6);
+  var learned = (BOOT.amounts || []).slice(0, 6);
+  var opts = isHours() ? HOUR_PRESETS : (learned.length ? learned : MONEY_FALLBACK);
   $('amtGrid').innerHTML = opts.map(function(a) {
     return '<button class="ctl' + (Math.abs(cur) === a ? ' on' : '') + '" onclick="pickAmt(' + a + ')">' +
            (isHours() ? hourLabel(a) : fmt(a)) + '</button>';
@@ -327,6 +336,13 @@ function renderAmounts() {
   var wrap = $('amtwrap');
   if (wrap) wrap.classList.toggle('nosign', isHours());
   $('amt').setAttribute('step', isHours() ? '0.5' : '1');
+
+  // THE KEYBOARD HAS TO HAVE A DECIMAL POINT (2026-08-26). With
+  // inputmode="numeric" iOS shows a keypad without one, so half hours were
+  // reachable only through the chips: 30 min worked, 1.5 could not be typed at
+  // all. "decimal" is the same keypad plus the separator. Money stays numeric —
+  // forints have no decimals and offering one only invites a wrong amount.
+  $('amt').setAttribute('inputmode', isHours() ? 'decimal' : 'numeric');
 }
 
 function renderWhen() {

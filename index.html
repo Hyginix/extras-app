@@ -214,6 +214,9 @@
       <div class="hint hidden" id="capWarn" style="color:var(--red);margin:0 0 8px"></div>
       <div class="amtwrap" id="amtwrap">
         <button class="ctl sign" id="signBtn" onclick="toggleSign()">+</button>
+        <!-- inputmode is set in renderAmounts, not here: "numeric" gives an iOS
+             keypad with NO decimal point, so 1.5 hours could not be typed at
+             all — only the whole-number chips worked. Money stays numeric. -->
         <input type="number" id="amt" class="ctl" inputmode="numeric" placeholder="0" oninput="render()">
       </div>
     </div>

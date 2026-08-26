@@ -225,6 +225,19 @@
         <input type="date" id="whenDate" class="ctl" onchange="onDateChange()">
       </div>
     </div>
+
+    <!-- A NOTE ON ANY ENTRY (2026-08-26). The reason list is a fixed set, and a
+         fixed set can never cover the case in front of somebody at 8pm — which
+         flat is it, whose shift was covered, what the guest actually wanted.
+         The server has taken a `notes` field and SUPERVISOR_HOURS has had a
+         Notes column all along; the app simply never sent one. Optional, so
+         nothing slows down when there is nothing to add. -->
+    <div class="field">
+      <div class="lbl">Note <span style="font-weight:400;opacity:.6">— optional</span></div>
+      <input type="text" id="noteText" class="ctl" placeholder="Anything the office should know…"
+             autocapitalize="sentences" maxlength="200">
+      <div class="hint">Shows up beside the entry in the office.</div>
+    </div>
   </main>
 
   <!-- ---------------- HISTORY ---------------- -->

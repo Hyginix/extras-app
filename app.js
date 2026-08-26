@@ -298,14 +298,27 @@ function onWhyChange() {
 
 // Quick picks. Hours are small whole numbers, so a fixed set beats the
 // most-used-amounts list the money form derives from history.
-var HOUR_PRESETS = [1, 2, 3, 4, 6, 8];
+// 30 MINUTES IS A REAL APPROVAL (2026-08-26). Half an hour comes up constantly
+// — a short wait, a quick extra job — and without a quick pick it had to be
+// typed as "0.5" into the number field, which on a phone is three taps and a
+// decimal point nobody expects to need.
+//
+// Stored as 0.5 because the server counts hours, but LABELLED "30 min":
+// a supervisor reads minutes, not fractions. The label is a display concern and
+// the value is never touched by it.
+var HOUR_PRESETS = [0.5, 1, 2, 3, 4, 6, 8];
+
+function hourLabel(h) {
+  if (h < 1) return Math.round(h * 60) + ' min';
+  return h + ' h';
+}
 
 function renderAmounts() {
   var cur = Number($('amt').value) || 0;
   var opts = isHours() ? HOUR_PRESETS : (BOOT.amounts || []).slice(0, 6);
   $('amtGrid').innerHTML = opts.map(function(a) {
     return '<button class="ctl' + (Math.abs(cur) === a ? ' on' : '') + '" onclick="pickAmt(' + a + ')">' +
-           (isHours() ? a + ' h' : fmt(a)) + '</button>';
+           (isHours() ? hourLabel(a) : fmt(a)) + '</button>';
   }).join('');
   var lbl = $('amtLbl');
   if (lbl) lbl.textContent = isHours() ? 'How many hours' : 'How much';
@@ -344,7 +357,9 @@ function render() {
   $('saveBtn').disabled = !ok;
   $('saveBtn').textContent = overCap
     ? ('Too many — ' + max + ' h is the limit')
-    : (ok ? (isHours() ? 'Save ' + amt + ' h' : 'Save ' + fmt(SEL.sign * amt) + ' Ft') : 'Save');
+    // Same wording as the chip they just tapped — "30 min" there and
+    // "Save 0.5 h" here reads like two different numbers.
+    : (ok ? (isHours() ? 'Save ' + hourLabel(amt) : 'Save ' + fmt(SEL.sign * amt) + ' Ft') : 'Save');
   var warn = $('capWarn');
   if (warn) {
     warn.classList.toggle('hidden', !overCap);
@@ -461,11 +476,17 @@ function save() {
   // Two shapes down one queue. The offline queue, the retry and the idempotency
   // all work the same either way; only `action` and the field names differ, and
   // the server routes on `action`.
+  // The note rides along on both shapes. The server has always accepted
+  // `notes` for an hours entry and SUPERVISOR_HOURS has always had a column for
+  // it; the app just never sent one. For a money extra it is appended to the
+  // description, which is the only free-text field that side has.
+  var note = String(($('noteText') && $('noteText').value) || '').trim();
+
   var entry = isHours()
     ? { clientId: id, action: 'hours', employeeName: SEL.name, date: when,
-        hours: amt, reason: reason }
+        hours: amt, reason: reason, notes: note }
     : { clientId: id, employeeName: SEL.name, date: when,
-        amount: SEL.sign * amt, description: reason };
+        amount: SEL.sign * amt, description: reason + (note ? ' — ' + note : '') };
 
   var q = get(LS.queue, []); q.push(entry); set(LS.queue, q);
 
@@ -487,6 +508,9 @@ function resetForm() {
   // small betrayal every time.
   SEL = { name: '', reason: '', otherReason: false, sign: 1, when: 'today' };
   $('amt').value = ''; $('whyOther').value = ''; $('whoSearch').value = '';
+  // Cleared with everything else — a note left behind would be attached to the
+  // NEXT person, which is worse than having no note at all.
+  if ($('noteText')) $('noteText').value = '';
   $('whyOtherWrap').classList.add('hidden');
   $('whenDate').value = todayStr();
   renderAll();

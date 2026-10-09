@@ -71,19 +71,22 @@ function start() {
   if (fromLink) {
     set(LS.url, fromLink.url); set(LS.key, fromLink.key);
 
-    // THE HASH IS ONLY STRIPPED WHEN RUNNING FROM THE ICON. Stripping it in
-    // Safari — which is what this did until 2026-08-04 — quietly broke the one
-    // instruction that matters: open the link, then Add to Home Screen. iOS
-    // saves whatever URL is showing at that moment, and by then the key had
-    // already been removed, so the icon opened an unconfigured app with its own
-    // empty storage. On iOS a home-screen app does not share Safari's storage,
-    // so there was nothing for it to fall back on either.
+    // THE HASH IS NEVER STRIPPED (2026-10-09). It used to be removed once the
+    // app was running from the icon, on the reasoning that there is no address
+    // bar to hide it from in standalone — which is true, and is exactly why
+    // stripping it bought nothing. What it cost was the only copy of the key
+    // the icon carries.
     //
-    // Keeping it means the icon carries its own setup. Once running from the
-    // icon there is no address bar to hide it from, so it goes then.
-    var standalone = (window.navigator.standalone === true) ||
-                     (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches);
-    if (standalone) history.replaceState(null, '', location.pathname + location.search);
+    // Stripping it in Safari broke things first, back on 2026-08-04: iOS saves
+    // whatever URL is showing when you Add to Home Screen, and the key had
+    // already been removed by then. That was fixed by stripping only in
+    // standalone. The remaining half was still wrong for the same reason, just
+    // one step later — and the manifest's start_url was overriding the launch
+    // URL anyway, so the icon never saw a key at all.
+    //
+    // Both are gone now, and the rule is simple: the config travels in the URL,
+    // local storage is only a cache of it. A cold launch re-reads the key every
+    // time, so iOS throwing the storage away stops mattering.
   }
 
   if (!localStorage.getItem(LS.url) || !localStorage.getItem(LS.key)) {

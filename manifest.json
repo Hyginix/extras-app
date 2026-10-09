@@ -2,7 +2,7 @@
   "name": "Hyginix — Log Extra",
   "short_name": "Log Extra",
   "description": "Log an operational extra for an employee in seconds, online or off.",
-  "start_url": "./index.html",
+  "_comment_start_url": "DELIBERATELY ABSENT (2026-10-09). It used to say './index.html', and that one line was why the home-screen icon kept opening the setup screen. The icon does not launch from the URL it was added at — it launches from start_url, which carried no device key. On iOS a home-screen app has its own storage, separate from Safari's, so it opened an empty app with nothing to fall back on. With no start_url the launch URL defaults to the page it was installed from, which is the setup link, key included. See the boot comment in app.js: this app's config travels in its own URL.",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",

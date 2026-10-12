@@ -17,11 +17,14 @@
 //   the manifest, and the hash is no longer stripped in standalone. Phones that
 //   already have the icon must re-add it; the saved one points at a URL with no
 //   key in it and no new code can put one there.
+// v11 (2026-10-09) — the bootstrap is a credential-less fetch, not a JSONP
+//   script tag, so the phone's signed-in Google account no longer decides
+//   whether the app can load. Errors now say what actually happened.
 // BUMPED ON EVERY RELEASE. The activate handler deletes every cache that is not
 // this one, so a new name is what evicts the old app files. Ship a change
 // without bumping it and phones keep the previous version until something else
 // forces a refresh.
-var CACHE = 'hyginix-extras-v10';
+var CACHE = 'hyginix-extras-v11';
 var SHELL = ['./', './index.html', './app.js', './manifest.json', './icon.svg'];
 var NET_TIMEOUT_MS = 3500;
 

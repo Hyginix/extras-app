@@ -166,9 +166,30 @@ function saveSetup() {
   start();
 }
 
-// JSONP — a cross-origin fetch() to an Apps Script /exec URL redirects through
-// googleusercontent and is unreliable; a script tag sidesteps CORS entirely.
-// Silent on failure: the cached lists keep the app usable.
+// WHY THIS IS A fetch AND NOT A <script> TAG (2026-10-09).
+//
+// It was JSONP, on the reasoning that a cross-origin fetch to an Apps Script
+// /exec URL redirects through googleusercontent and a script tag sidesteps
+// CORS. Both halves turned out to be wrong: the endpoint answers
+// `access-control-allow-origin: *` on the redirect AND on the final response,
+// and post() below has been fetching the same URL in production for months.
+//
+// What the script tag DID do was send Google's cookies. On a phone signed in
+// to the company Google account, Google routed the request through that
+// account, refused it, and returned an HTML error page — which a script tag
+// cannot execute, so it reported a network failure. The app then told the
+// supervisor to check their signal, with the signal perfectly fine. It cost
+// two separate afternoons, in August and again on 9 October, and the only
+// workaround was a browser that was not signed in.
+//
+// `credentials: 'omit'` sends no cookies at all, so Google sees an anonymous
+// request — which is exactly how the web app is deployed (ANYONE_ANONYMOUS).
+// The signed-in account stops mattering.
+//
+// No JSONP fallback on purpose: falling back would be falling back to the
+// broken path, and would hide the problem again. The app already requires
+// fetch and Object.assign elsewhere.
+//
 // onFail is used on FIRST SETUP only. Staying silent is right when there are
 // cached lists to fall back on — the app keeps working offline and says nothing.
 // But on a phone that has never connected there is nothing to fall back on, and
@@ -177,22 +198,61 @@ function saveSetup() {
 function refreshBootstrap(onFail) {
   var url = get(LS.url, ''), key = get(LS.key, '');
   if (!url) return;
-  var cb = 'hxcb' + Date.now(), s = document.createElement('script'), done = false;
   function fail(msg) { if (onFail) onFail(msg); }
-  window[cb] = function(res) {
-    done = true;
-    if (res && res.ok) { BOOT = res; set(LS.boot, res); renderAll(); }
-    else fail((res && res.message) || 'The app URL refused the request.');
-    cleanup();
-  };
-  function cleanup() {
-    try { delete window[cb]; } catch (e) { window[cb] = undefined; }
-    if (s.parentNode) s.parentNode.removeChild(s);
-  }
-  s.onerror = function() { fail('Could not reach that URL. Check the address and the signal.'); cleanup(); };
-  setTimeout(function(){ if (!done) { fail('No answer from the app URL after 12 seconds.'); cleanup(); } }, 12000);
-  s.src = url + '?callback=' + cb + '&key=' + encodeURIComponent(key) + '&t=' + Date.now();
-  document.body.appendChild(s);
+
+  var src = url + '?callback=cb&key=' + encodeURIComponent(key) + '&t=' + Date.now();
+
+  // fetch has no timeout of its own. Twelve seconds, as the script tag had.
+  var ctrl = (typeof AbortController === 'function') ? new AbortController() : null;
+  var timer = setTimeout(function () { if (ctrl) ctrl.abort(); }, 12000);
+  var timedOut = false;
+  if (ctrl) ctrl.signal.addEventListener('abort', function () { timedOut = true; });
+
+  fetch(src, { credentials: 'omit', signal: ctrl ? ctrl.signal : undefined })
+    .then(function (r) {
+      if (!r.ok) throw new Error('The app URL answered ' + r.status + ' ' + (r.statusText || '') + '.');
+      return r.text();
+    })
+    .then(function (text) {
+      var res = unwrapJsonp(text);
+
+      // A GOOGLE PAGE INSTEAD OF DATA. This is the one that kept being read as
+      // "no signal". Say what it actually means, and what fixes it.
+      if (!res) {
+        if (/^\s*<(!doctype|html)/i.test(text)) {
+          throw new Error('The app URL returned a Google page instead of data. ' +
+            'This phone is usually signed in to a Google account that cannot open ' +
+            'it — try the same link in a private tab to check.');
+        }
+        throw new Error('The app URL answered something that is not data.');
+      }
+
+      if (!res.ok) { fail(res.message || 'The app URL refused the request.'); return; }
+      BOOT = res; set(LS.boot, res); renderAll();
+    })
+    .catch(function (err) {
+      if (timedOut) { fail('No answer from the app URL after 12 seconds.'); return; }
+      // A TypeError out of fetch is the browser refusing to make the request at
+      // all — no network, or a blocked origin. Anything else carries its own
+      // message from above.
+      var msg = (err && err.name === 'TypeError')
+        ? 'Could not reach the app URL at all — no signal, or the connection is blocked.'
+        : String((err && err.message) || err);
+      fail(msg + '\n\nIt tried: ' + url);
+    })
+    .then(function () { clearTimeout(timer); });
+}
+
+
+// The endpoint always wraps its answer as JSONP — doGet defaults the callback
+// to "cb" even when none is asked for — so the wrapper comes off here rather
+// than changing the server, which would mean a new deployment and would break
+// any phone still running the old app.
+function unwrapJsonp(text) {
+  var t = String(text == null ? '' : text).trim();
+  var m = t.match(/^[A-Za-z_$][\w$.]*\s*\(([\s\S]*?)\)\s*;?$/);
+  if (!m) return null;
+  try { return JSON.parse(m[1]); } catch (e) { return null; }
 }
 
 function refreshHistory() {
@@ -208,6 +268,12 @@ function post(payload, onDone) {
   if (!url) { onDone && onDone(null); return; }
   fetch(url, {
     method: 'POST',
+    // SPELLED OUT, not left to the default (2026-10-09). The default is
+    // 'same-origin', which already sends no cookies cross-origin — which is
+    // why sending entries kept working on the very phones where the old JSONP
+    // bootstrap was being refused. Saying it here means nobody has to know
+    // that to see why this one is safe.
+    credentials: 'omit',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
     body: JSON.stringify(Object.assign({ key: key }, payload))
   }).then(function(r) { return r.json(); })
